@@ -1,0 +1,11 @@
+# Infrastructure as Code for Render (a "Blueprint").
+# Optional: you can also create the same service by clicking in the Render dashboard (see the report).
+# Change OWNER to your lower-case GitHub username.
+services:
+  - type: web
+    name: quiz-app
+    runtime: image
+    image:
+      url: ghcr.io/OWNER/quiz-app:latest
+    plan: free
+    healthCheckPath: /healthz

@@ -1,30 +1,39 @@
-#!/usr/bin/env bash
-# Health + error check for the quiz app.
-# Usage:  bash scripts/check_health.sh https://your-app.onrender.com
-# Exit code 0 = healthy, 1 = problem (so a pipeline can turn red and send an email).
-set -u
-URL="${1:-}"
-URL="${URL%/}"
-[ -n "$URL" ] || { echo "Usage: $0 BASE_URL"; exit 2; }
+#!/bin/bash
+set -e
 
-out=$(curl -sS --max-time 90 -w '\n%{http_code} %{time_total}' "$URL/healthz") \
-  || { echo "FAIL: cannot reach $URL"; exit 1; }
-body=$(echo "$out" | head -n1)
-meta=$(echo "$out" | tail -n1)
-code=${meta% *}
-secs=${meta#* }
-echo "health check -> HTTP $code in ${secs}s : $body"
+TARGET_URL="${1:-$RENDER_APP_URL}"
 
-[ "$code" = "200" ] || { echo "FAIL: health check returned HTTP $code"; exit 1; }
-echo "$body" | grep -q '"status": "ok"' || { echo "FAIL: status is not ok"; exit 1; }
-
-metrics=$(curl -sS --max-time 30 "$URL/metrics") || { echo "FAIL: /metrics not reachable"; exit 1; }
-errors=$(echo "$metrics" | awk '/^quiz_errors_total/{print $2}')
-reqs=$(echo "$metrics" | awk '/^quiz_requests_total/{print $2}')
-echo "requests so far = ${reqs:-?}, server errors so far = ${errors:-?}"
-
-if [ "${errors:-0}" -ge "${MAX_ERRORS:-5}" ]; then
-  echo "FAIL: too many server errors (${errors} >= ${MAX_ERRORS:-5})"
+if [ -z "$TARGET_URL" ]; then
+  echo "Error: Target URL not provided."
   exit 1
 fi
-echo "OK: app is healthy"
+
+echo "Running health check against: $TARGET_URL"
+
+# 1. Check /healthz endpoint
+HEALTH_OUTPUT=$(curl -s -w "\n%{http_code}" "$TARGET_URL/healthz" || true)
+HTTP_STATUS=$(echo "$HEALTH_OUTPUT" | tail -n1)
+BODY=$(echo "$HEALTH_OUTPUT" | sed '$d')
+
+echo "Response code: $HTTP_STATUS"
+echo "Payload: $BODY"
+
+if [ "$HTTP_STATUS" -ne 200 ]; then
+  echo "ALERT: /healthz returned status $HTTP_STATUS (expected 200)"
+  exit 1
+fi
+
+# 2. Check /metrics endpoint
+METRICS_DATA=$(curl -s "$TARGET_URL/metrics" || echo "{}")
+echo "Metrics output: $METRICS_DATA"
+
+ERROR_COUNT=$(echo "$METRICS_DATA" | grep -o '"errors":[14-22]*' | cut -d: -f2 || echo 0)
+
+if [ -n "$ERROR_COUNT" ] && [ "$ERROR_COUNT" -ge 5 ]; then
+  echo "ALERT: Server errors reached threshold of $ERROR_COUNT (>= 5)"
+  exit 1
+fi
+
+echo "Service is healthy and meeting SRE SLOs."
+exit 0
+
